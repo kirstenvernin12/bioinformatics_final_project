@@ -26,6 +26,12 @@
 
 # TASK 5 - Debugging the Function for Data Pre-processing, Training the ML Model, and Generating Outputs for Evaluation
 - Tool/model & version: ChatGPT-5
+- What I asked for: To help with debugging process for the function for data pre-processing, training the ML model and generating outputs
 - Snippet of prompt(s): "what does this mean: → A | error: Error: Missing data in dependent variable. → B | warning: ! There are new levels in RouteName: "COLUMBUS", "FOUR LAKES", "OAK GROVE", "PEDRO CREEK", "PADRE ISLAND PAIS", and "CHAMPION". ℹ Consider using step_novel() before step_dummy() to handle unseen values. There were issues with some computations A: x220 B: x55" [[This was repeated many times with different error codes.]]
 - How I verified correctness (tests, sample data): Ran the updated function, and if I got another error, asked Chat what it meant. I also re-examined the structure of the data and revisited the processing and model pre-processing steps to determine if the underlying structure was the cause of the errors. 
   
+# TASK 6 - Data Reprocessing to Create New Training Dataset
+- Tool/model & version: ChatGPT-5
+- What I asked for: To write a function for data processing steps to get the slope of the linear regression line (representative of abundance trend over time)
+- Snippet of prompt(s): "Write a function that dies the following for all species (scientific_name) for the attached dataset..."
+- How I verified correctness (test, sample data): Ensured that the output of the function was the same that I got from my previously written code that did the same thing.
