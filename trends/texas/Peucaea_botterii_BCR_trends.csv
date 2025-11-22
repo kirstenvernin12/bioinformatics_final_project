@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Peucaea botterii",35,NA,NA,NA,NA,NA,NA
+"Peucaea botterii",36,-0.0575139146567718,-1.04877878853838,0.933750959224839,117.907235621521,-0.454671236753561,"Stable"
+"Peucaea botterii",37,-0.237063778580024,-0.379309623716555,-0.0948179334434932,480.13778580024,0.302283579174137,"Decreasing"

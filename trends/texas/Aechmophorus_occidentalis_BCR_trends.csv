@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Aechmophorus occidentalis",18,-0.187287431033179,-0.329283228310248,-0.0452916337561104,379.373743481218,0.318264319945326,"Decreasing"
+"Aechmophorus occidentalis",19,-0.0492341356673892,-0.277901254562685,0.179432983227907,102.335828630644,-0.046125132429679,"Stable"
+"Aechmophorus occidentalis",35,NA,NA,NA,NA,NA,NA

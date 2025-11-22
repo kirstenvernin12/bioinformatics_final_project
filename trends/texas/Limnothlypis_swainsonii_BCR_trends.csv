@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Limnothlypis swainsonii",21,0.0134038031929385,-0.0190219241773419,0.0458295305632189,-25.6045878058084,-0.0138414019506361,"Stable"
+"Limnothlypis swainsonii",25,-0.00717007621339743,-0.034425564937853,0.0200854125110581,16.9090954673083,-0.0290271092392036,"Stable"
+"Limnothlypis swainsonii",37,0,0,0,1,NA,"Stable"

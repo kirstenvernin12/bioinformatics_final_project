@@ -1,0 +1,6 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Passerina amoena",18,-0.0245670559806688,-0.109919873159832,0.0607857611984941,51.2343938783735,-0.0300449595987613,"Stable"
+"Passerina amoena",19,-2.80508979435534e-17,-4.78712217955474e-17,-8.23057409155938e-18,1.00000000000006,0.491458085021827,"Stable"
+"Passerina amoena",20,NA,NA,NA,NA,NA,NA
+"Passerina amoena",25,NA,NA,NA,NA,NA,NA
+"Passerina amoena",35,NA,NA,NA,NA,NA,NA

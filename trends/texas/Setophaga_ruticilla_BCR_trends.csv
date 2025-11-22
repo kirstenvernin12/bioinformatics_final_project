@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Setophaga ruticilla",18,-0.106105559025605,-0.266763217553573,0.054552099502362,215.961196127413,0.0435577711398811,"Stable"
+"Setophaga ruticilla",21,NA,NA,NA,NA,NA,NA
+"Setophaga ruticilla",25,0.00782190132370627,-0.0268751880192682,0.0425189906666807,-14.2190132370636,-0.0323548793765402,"Stable"

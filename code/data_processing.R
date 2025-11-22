@@ -8,6 +8,10 @@ library(sf)
 library(data.table)
 library(R.utils)
 library(lubridate)
+library(purrr)
+library(tidyr)
+library(broom)
+library(stringr)
 
 #Data processing
 #join the US BBS data into one file
@@ -31,13 +35,17 @@ routes <- routes %>% select(-CountryNum)
 #join bbs_us and routes so that this can be filtered
 bbs_us <- merge(bbs_us,routes,by=c("StateNum","Route"))
 
-#to get list of BCRs that enter TX
-tx <- read.csv("raw_data/texas_analysis_09182025/Texas.csv")
-tx <- merge(routes,tx,by=c("StateNum","Route"))
-BCR_tx <- unique(tx$BCR)
+#to get list of BCRs that enter state of interest
+get_state_bcrs <- function(data, state_number) {
+  data %>%
+    filter(StateNum == state_number) %>%
+    distinct(BCR) %>%
+    pull(BCR)
+}
 
 #Texas Workflow
-bbs_tx_bcr <- bbs_us %>% filter(BCR %in% BCR_tx)
+tx_bcrs <- get_state_bcrs(bbs_us, 83)
+bbs_tx_bcr <- bbs_us %>% filter(BCR %in% tx_bcrs)
 
 #Texas observations with SpeciesList to obtain species names and routes to gather route information
 species <- read.csv("raw_data/SpeciesList.csv")
@@ -51,13 +59,6 @@ dist <- dist %>%
 #Get total cars observed
 dist$TotalCarObs <- rowSums(dist[paste0("Car",1:50)],na.rm=TRUE)
 
-#Create NoiseDetected field (1=Y,0=N)
-dist$NoiseDetected <- ifelse(
-  rowSums(dist[paste0("Noise", 1:50)] == 1, na.rm = TRUE) > 0,
-  1,
-  0
-)
-
 #Remove Car and Noise stop data 1-50
 dist <- dist[ , !names(dist) %in% c(paste0("Car", 1:50), paste0("Noise", 1:50))]
 
@@ -68,11 +69,9 @@ weather <- weather %>%
 weather$StartTemp <- as.numeric(weather$StartTemp)
 weather$EndTemp <- as.numeric(weather$EndTemp)
 
-weather <- weather %>%
-  mutate(Avg_Temp=(StartTemp+EndTemp)/2)
 
 weather <- weather %>%
-  select(RouteDataID,Month,Day,StartTime,EndTime,Avg_Temp)
+  select(RouteDataID,Month,Day,StartTime,EndTime,StartTemp, EndTemp)
 
 #No filtering required because "AOU" only shared field
 bbs_tx_bcr <- merge(bbs_tx_bcr,species, by="AOU")
@@ -83,602 +82,26 @@ bbs_tx_bcr <- merge(weather,bbs_tx_bcr,by="RouteDataID")
 #Step 1 - create a combined Genus species field
 bbs_tx_bcr <- bbs_tx_bcr %>% mutate(scientific_name = paste(Genus,Species, sep = " "))
 
+bbs_tx_bcr <- bbs_tx_bcr %>% select(c(RouteDataID,Route, AOU,CountryNum,StateNum, Latitude,Longitude,Stratum,
+                                      BCR,Month,Day,Year,StartTemp, EndTemp,TotalCarObs,SpeciesTotal,English_Common_Name,Order,Family,
+                                      scientific_name))%>%
+  rename(Abundance=SpeciesTotal)
+
+
 #organize fields
-bbs_tx_bcr <- bbs_tx_bcr[,c("RouteDataID", "Route", "RouteName", "RouteTypeID", "RouteTypeDetailID","Active",
-                          "AOU", "CountryNum", "StateNum","RPID","Latitude", "Longitude", "Stratum", "BCR",
-                          "Month", "Day", "Year","StartTime", "EndTime", "Avg_Temp","Count10", "Count20", "Count30",            
-                          "Count40", "Count50", "StopTotal", "SpeciesTotal", "RecordedCar", "TotalCarObs",
-                          "NoiseDetected", "Seq", "English_Common_Name", "French_Common_Name", "Order","Family",             
-                          "Genus", "Species","scientific_name")] 
+bbs_tx_bcr <- bbs_tx_bcr[,c("RouteDataID", "Route","AOU", "CountryNum", "StateNum","Latitude", "Longitude", "Stratum", "BCR",
+                          "Month", "Day", "Year","StartTemp", "EndTemp", "Abundance", "TotalCarObs",
+                          "English_Common_Name", "Order","Family","scientific_name")] 
+write.csv(bbs_tx_bcr,"raw_data/bbs_tx_bcr.csv",row.names = FALSE)
 
-#subset for 1997-2023 and species of interest
-training <- bbs_tx_bcr %>%
-  filter(scientific_name== "Riparia riparia"|scientific_name=="Chaetura pelagica"|
-           scientific_name=="Chordeiles minor"|scientific_name=="Tachycineta bicolor"|
-           scientific_name== "Petrochelidon pyrrhonota"|scientific_name=="Hirundo rustica"|
-           scientific_name=="Corvus corax"|scientific_name=="Coragyps atratus") %>%
-  filter(Year>=1997)
+#filter for period of interest (1997-2023)
+bbs_tx_sub <- bbs_tx_bcr %>% filter(Year>=1997)
 
-#Additional Processing - training data only
-# Get the abundance data for entire state and BCRs (these are the BCRs that intersect the state),
-# Adjust the abundance over time for the number of routes over time (group by year)
-# Then get the trend over time (slope of the linear regression)
-# use that to create label (increasing - slope > 0.00, decreasing - slope < 0.00, stable - slope = 0.00)
-#these labels will go in either of two new fields (StateTrend, BCRTrend) - will have to rejoin the tables and then export a new csv file
-
-#from macroecology - "in performing correlation analyses it is important yo use only sites where a species occurs to calculate its average abundance" (exclude 0 values)
-
-#Black vulture
-#State Trend - Black vulture
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Coragyps atratus") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #0.1730345  (Increasing for the state)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Coragyps atratus"
-State_Trend <- "Increasing"
-
-State_vul <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Black vulture
-train_bcr <- training %>% filter(scientific_name== "Coragyps atratus") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Decreasing", "Increasing", "Increasing", "Increasing","Increasing","Increasing","Increasing") #One with no trend
-BCR <- c(19,20,21,25,35,36,37)
-scientific_name <- c("Coragyps atratus","Coragyps atratus","Coragyps atratus","Coragyps atratus",
-                     "Coragyps atratus","Coragyps atratus","Coragyps atratus")
-
-BCR_vul <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Common raven
-#State Trend - Common raven
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Corvus corax") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #0.009326113  (Increasing for the state)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Corvus corax"
-State_Trend <- "Increasing"
-
-State_raven <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Common raven
-train_bcr <- training %>% filter(scientific_name== "Corvus corax") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Increasing", "Decreasing", "Increasing", "Increasing","Stable",NA) #One with no trend
-BCR <- c(18,19,20,21,35,36)
-scientific_name <- c("Corvus corax","Corvus corax","Corvus corax","Corvus corax",
-                     "Corvus corax","Corvus corax")
-
-BCR_raven <- data.frame(BCR, BCR_trend,scientific_name)
-
-
-#Bank Swallow (All trends decreasing)
-#State Trend - Bank Swallow
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Riparia riparia") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-  
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #-0.4987682 (Decreasing for the state)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Riparia riparia"
-State_Trend <- "Decreasing"
-
-State_bank <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Bank Swallow
-train_bcr <- training %>% filter(scientific_name== "Riparia riparia") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Increasing", "Increasing", NA, "Decreasing","Increasing","Decreasing","Decreasing") #One with no trend
-BCR <- c(18,19,20,21,35,36,37)
-scientific_name <- c("Riparia riparia","Riparia riparia","Riparia riparia","Riparia riparia",
-                     "Riparia riparia","Riparia riparia","Riparia riparia")
-
-BCR_bank <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Tree Swallow
-#State Trend - Tree Swallow
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Tachycineta bicolor") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #0.007909698  (Stable)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Tachycineta bicolor"
-State_Trend <- "Stable"
-
-State_tree <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Tree Swallow
-train_bcr <- training %>% filter(scientific_name== "Tachycineta bicolor") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Decreasing", "Increasing", NA, "Decreasing","Increasing",NA) #Two with no trend
-BCR <- c(18,19,20,21,25,37)
-scientific_name <- c("Tachycineta bicolor","Tachycineta bicolor","Tachycineta bicolor",
-                     "Tachycineta bicolor","Tachycineta bicolor","Tachycineta bicolor")
-
-BCR_tree <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Cliff Swallow
-#State Trend - Cliff Swallow
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Petrochelidon pyrrhonota") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #-0.5290313   (Decreasing)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Petrochelidon pyrrhonotar"
-State_Trend <- "Decreasing"
-
-State_cliff <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Cliff Swallow
-train_bcr <- training %>% filter(scientific_name== "Petrochelidon pyrrhonota") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Decreasing", "Decreasing", "Decreasing", "Decreasing","Increasing","Decreasing","Increasing","Decreasing") 
-BCR <- c(18,19,20,21,25,35,36,37)
-scientific_name <- c("Petrochelidon pyrrhonotar","Petrochelidon pyrrhonota","Petrochelidon pyrrhonota",
-                     "Petrochelidon pyrrhonota","Petrochelidon pyrrhonota","Petrochelidon pyrrhonota","Petrochelidon pyrrhonota",
-                     "Petrochelidon pyrrhonota")
-
-BCR_cliff <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Barn Swallow
-#State Trend - Barn Swallow
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Hirundo rustica") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-bank_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(bank_lm)["Year"] #-0.3456679    (Decreasing)
-summary(bank_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Hirundo rustica"
-State_Trend <- "Decreasing"
-
-State_barn <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Barn Swallow
-train_bcr <- training %>% filter(scientific_name== "Hirundo rustica") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Increasing", "Decreasing", "Stable", "Decreasing","Decreasing","Decreasing","Decreasing","Decreasing") 
-BCR <- c(18,19,20,21,25,35,36,37)
-scientific_name <- c("Hirundo rustica","Hirundo rustica", "Hirundo rustica", "Hirundo rustica", "Hirundo rustica", 
-                     "Hirundo rustica", "Hirundo rustica", "Hirundo rustica")
-
-BCR_barn <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Chimney Swift
-#State Trend - Chimney Swift
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Chaetura pelagica") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-chimney_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(chimney_lm)["Year"] #-0.1377858 (Decreasing for the state)
-summary(chimney_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Chaetura pelagica"
-State_Trend <- "Decreasing"
-
-State_chimney <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Bank Swallow
-train_bcr <- training %>% filter(scientific_name== "Chaetura pelagica") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-#If 0.00 then stable
-BCR_trend <- c("Stable", "Decreasing", "Decreasing","Decreasing", "Decreasing", "Increasing", "Decreasing","Decreasing")
-BCR <- c(18,19,20,21,25,35,36,37)
-scientific_name <- c("Chaetura pelagica","Chaetura pelagica","Chaetura pelagica","Chaetura pelagica","Chaetura pelagica","Chaetura pelagica", "Chaetura pelagica","Chaetura pelagica")
-
-BCR_chimney <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Common Nighthawk
-#State Trend - Common Nighthawk
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Chordeiles minor") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-night_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(night_lm)["Year"] #-0.191436 (Decreasing for the state)
-summary(night_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Chordeiles minor"
-State_Trend <- "Decreasing"
-
-State_night <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Common Nighthawk
-train_bcr <- training %>% filter(scientific_name== "Chordeiles minor") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Decreasing", "Increasing", "Decreasing","Decreasing", "Decreasing", "Decreasing","Decreasing","Decreasing")
-BCR <- c(18,19,20,21,25,35,36,37)
-scientific_name <- c("Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor", "Chordeiles minor","Chordeiles minor")
-
-BCR_night <- data.frame(BCR, BCR_trend,scientific_name)
-
-#Common Nighthawk
-#State Trend - Common Nighthawk
-train_state <- training %>% filter(StateNum==83 & scientific_name== "Chordeiles minor") %>%
-  group_by(Year) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-# Fit linear regression model
-night_lm <- lm(adj_species_abundance ~ Year, data = train_state)
-
-# Extract the slope (coefficient for Year)
-coef(night_lm)["Year"] #-0.191436 (Decreasing for the state)
-summary(night_lm)
-# Plot data and regression line
-plot(train_state$Year, train_state$adj_species_abundance,
-     xlab = "Year",
-     ylab = "Adjusted Species Abundance",
-     main = "Linear Regression of Adjusted Species Abundance Over Time")
-
-abline(bank_lm, lwd = 2)
-
-StateNum <- 83
-scientific_name <- "Chordeiles minor"
-State_Trend <- "Decreasing"
-
-State_night <- data.frame(StateNum,State_Trend,scientific_name)
-
-#BCR Trend for TX - Common Nighthawk
-train_bcr <- training %>% filter(scientific_name== "Chordeiles minor") %>%
-  group_by(Year,BCR) %>%
-  summarise(adj_species_abundance=round(sum(SpeciesTotal)/n_distinct(Route)),.groups= "drop")
-
-models_by_bcr <- train_bcr %>%
-  group_by(BCR) %>%
-  group_modify(~ {
-    m <- lm(adj_species_abundance ~ Year, data = .x)
-    tibble(
-      slope = coef(m)["Year"],
-      intercept = coef(m)["(Intercept)"]
-    )
-  })
-
-models_by_bcr
-
-ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
-  facet_wrap(~ BCR, scales = "free_y") +
-  labs(
-    x = "Year",
-    y = "Adjusted Species Abundance",
-    title = "Linear Regression of Adjusted Species Abundance Over Time by BCR"
-  )
-
-BCR_trend <- c("Decreasing", "Increasing", "Decreasing","Decreasing", "Decreasing", "Decreasing","Decreasing","Decreasing")
-BCR <- c(18,19,20,21,25,35,36,37)
-scientific_name <- c("Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor","Chordeiles minor", "Chordeiles minor","Chordeiles minor")
-
-BCR_night <- data.frame(BCR, BCR_trend,scientific_name)
-
-
-#join the tables to the full training dataset
-State <- merge(State_bank,State_chimney, all=TRUE)
-State <- merge(State,State_night, all=TRUE)
-State <- merge(State,State_tree, all=TRUE)
-State <- merge(State,State_barn, all=TRUE)
-State <- merge(State,State_cliff, all=TRUE)
-State <- merge(State,State_raven,all=TRUE)
-State <- merge(State,State_vul,all=TRUE)
-
-BCR <- merge(BCR_bank,BCR_chimney, all=TRUE)
-BCR <- merge(BCR,BCR_night,all=TRUE)
-BCR <- merge(BCR,BCR_tree,all=TRUE)
-BCR <- merge(BCR,BCR_barn,all=TRUE)
-BCR <- merge(BCR,BCR_cliff,all=TRUE)
-BCR <- merge(BCR,BCR_raven,all=TRUE)
-BCR <- merge(BCR,BCR_vul,all=TRUE)
-
-training$StateNum <- as.numeric(training$StateNum)
-
-training <- training %>% left_join(State, by=c("StateNum","scientific_name"))
-training <- training %>% left_join(BCR,by=c("BCR","scientific_name"))
-
-#create csv of the bbs data
-write.csv(training,"raw_data/bbs_texas_training.csv", row.names=FALSE)
-
-training <- read.csv("raw_data/bbs_texas_training.csv")
 
 #Match weather stations with closest route point
 weatherstations <- read.csv("raw_data/NOAA_weather/ghcnd-stations.csv")
 #First convert both data frames to sf point objects
-points <- st_as_sf(training,
+points <- st_as_sf(bbs_tx_sub,
                    coords = c("Longitude", "Latitude"),
                    crs = 4326)
 
@@ -692,9 +115,6 @@ nearest_index <- st_nearest_feature(points, stations)
 #Extract the station numbers
 points$NearestStation <- stations$ID[nearest_index]
 weatherstations <- unique(points$NearestStation)
-
-#Export the matching weather stations to know which stations to pull data for
-write.csv(points, "raw_data/nearest_stations_training.csv", row.names = FALSE)
 
 #Import, filter, and process NOAA weather data
 
@@ -769,55 +189,563 @@ stations <- weatherstations
 
 weather_processed <- process_weather_years(path, years, stations)
 
-
-#BE SURE THAT THE DATE FIELDS ARE THE SAME IN BOTH DATA FRAMES WHEN PROCESSING TESTING DATA FOR CO!!!!! (see below)
+#BE SURE THAT THE DATE FIELDS ARE THE SAME IN BOTH DATA FRAMES
 #Create date and time fields in training data that are the same format as the weather data
 points <- points %>% mutate(DATE_YYYYMMDD=sprintf("%04d%02d%02d",Year,Month,Day))
 #make sure the same data type
 weather_processed$DATE_YYYYMMDD <- as.character(weather_processed$DATE_YYYYMMDD)
 
 
-#join the training data with the weather data - nearest weather collection station by match date and match station IDs
+#join the bbs data with the weather data - nearest weather collection station by match date and match station IDs
 merged <- points %>%
   left_join(
     weather_processed,
     by = c("DATE_YYYYMMDD", "NearestStation" = "ID")
   )
-
-#Convert to data frame
-training <- as.data.frame(merged)
-
-
 #PRCP: mm
 #TMIN and TMAX: degrees celsius
+#StartTemp and EndTemp degrees F
+#Convert daily data into annual summaries per route 
+env <- as.data.frame(merged)
 
-#remove unnecessary columns
-#Data processing and splitting of state and BCR training dataset
+write.csv(env,"raw_data/bbs_bcr_tx_env.csv")
 
-#Remove unneeded fields. This will open memory and increase speed because large datasets with many unused columns take more
-#memory and longer processing times. Fewer columns also make preprocessing and feature selection steps easier to follow. 
-#This also reduces the risk of accidental leakage. Columns not intended as predictors may inadvertently leak information
-#about the target (if they contain IDs, dates, or future information - basically, better safe than sorry!) It is best
-#practice to keep only the columns you intend to use as predictors or target when feeding data into preprocessing/recipe 
-# steps. 
+#Calculate annual summary stats
 
-#state training dataset
-training_TX <- training %>% filter(StateNum==83) %>% 
-  select(RouteName, Active, Stratum, BCR, Month, Day, Year, Avg_Temp, SpeciesTotal, 
-         RecordedCar, TotalCarObs, NoiseDetected, English_Common_Name, Order, Family, 
-         scientific_name, State_Trend, BCR_trend, PRCP, TMAX, TMIN) %>% rename(BCR_Trend=BCR_trend)
+num_routes_state <- env %>% filter(StateNum==83) %>%
+  group_by(Year)%>%
+  summarise(num_routes = n_distinct(Route))
+  
+num_routes_BCR <- env %>%
+  group_by(Year,BCR)%>%
+  summarise(num_routes = n_distinct(Route))
+
+#Species richness
+#State
+state_rich <- env %>% filter(StateNum==83) %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year) %>%
+  summarise(species_rich=n_distinct(scientific_name)) 
+
+state_numroutes <- env %>% filter(StateNum==83) %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year) %>%
+  summarise(num_routes=n_distinct(Route)) 
+
+state_rich_perroute <- env %>% filter(StateNum==83) %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year) %>%
+  summarise(species_per_route=round(n_distinct(scientific_name)/n_distinct(Route)))
+
+state_annual_summ <- merge(state_rich,state_numroutes,by="Year")
+state_annual_summ <- merge(state_annual_summ,state_rich_perroute,by="Year")
+
+#convert from long to wide format
+state_rich <- state_annual_summ %>%
+  pivot_longer(
+    cols = c(species_rich, num_routes, species_per_route),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(feature, value) %>%
+  pivot_wider(
+    names_from = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+#BCR
+BCR_rich <- env %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,BCR) %>%
+  summarise(species_rich=n_distinct(scientific_name)) 
+
+BCR_numroutes <- env %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,BCR) %>%
+  summarise(num_routes=n_distinct(Route)) 
+
+BCR_numroutes <- env %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,BCR,scientific_name) %>%
+  summarise(num_routes=n_distinct(Route)) 
+
+BCR_rich_perroute <- env %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,BCR) %>%
+  summarise(species_per_route=round(n_distinct(scientific_name)/n_distinct(Route)))
+
+BCR_annual_summ <- merge(BCR_rich,BCR_numroutes,by=c("Year","BCR"))
+BCR_annual_summ <- merge(BCR_annual_summ,BCR_rich_perroute,by=c("Year","BCR"))
+
+#convert from long to wide format
+BCR_rich <- BCR_annual_summ %>%
+  pivot_longer(
+    cols = c(species_rich, num_routes, species_per_route),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(BCR,feature, value) %>%
+  pivot_wider(
+    names_from = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+#Abundance
+#State
+state_abund <- env %>% filter(StateNum==83) %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,scientific_name) %>%
+  summarise(abundance=sum(Abundance)) 
+
+state_numroutes <- state_annual_summ %>% select(c(Year,num_routes))
+
+state_abund <- merge(state_abund,state_numroutes,by="Year")
 
 
-#BCR training dataset
-training_BCR <- training %>% 
-  select(RouteName, Active, Stratum, BCR, Month, Day, Year, Avg_Temp, SpeciesTotal, 
-         RecordedCar, TotalCarObs, NoiseDetected, English_Common_Name, Order, Family, 
-         scientific_name, State_Trend, BCR_trend, PRCP, TMAX, TMIN) %>% rename(BCR_Trend=BCR_trend)
+state_abund_summ <-state_abund %>%
+  group_by(Year,scientific_name) %>%
+  summarise(abund_per_route=round(abundance/num_routes))
 
-#Remove the one BCR that is NA
-training_BCR <- training_BCR  %>% filter(!is.na(BCR_Trend))
+state_annual_abund_summ<- merge(state_abund_summ,state_abund,by=c("Year","scientific_name"))
 
-#write training datasets to training folder
-write.csv(training_TX,"training/training_TX.csv",row.names=FALSE)
-write.csv(training_BCR,"training/training_BCR.csv",row.names=FALSE)
+#convert from long to wide format
+state_abundance <- state_annual_abund_summ %>%
+  pivot_longer(
+    cols = c(abund_per_route, abundance),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(scientific_name, feature, value) %>%
+  pivot_wider(
+    names_from = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+#BCR
+BCR_abund <- env %>% filter(StateNum==83) %>%
+  filter(                                              #this filters out unknown species and hybrids
+    !grepl(" / ", scientific_name),
+    !grepl(" sp\\.", scientific_name),
+    !grepl(" x ", scientific_name, ignore.case = TRUE)
+  ) %>%
+  group_by(Year,scientific_name,BCR) %>%
+  summarise(abundance=sum(Abundance)) 
+
+BCR_numroutes <- BCR_annual_summ %>% select(c(Year,BCR,num_routes))
+
+BCR_abund <- merge(BCR_abund,BCR_numroutes,by=c("Year","BCR"))
+
+
+BCR_abund_summ <-BCR_abund %>%
+  group_by(Year,scientific_name,BCR) %>%
+  summarise(abund_per_route=round(abundance/num_routes))
+
+BCR_annual_abund_summ<- merge(BCR_abund_summ,BCR_abund,by=c("Year","scientific_name","BCR"))
+
+#convert from long to wide format
+BCR_abundance <- BCR_annual_abund_summ %>%
+  pivot_longer(
+    cols = c(abund_per_route, abundance),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(scientific_name, BCR,feature, value) %>%
+  pivot_wider(
+    names_from = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+
+#join abundance and richness
+#State
+state_abundance$StateNum <- 83
+state_rich$StateNum <- 83
+
+state_trends <- merge(state_abundance,state_rich,by="StateNum")
+
+#BCR
+bcr_trends <- merge(BCR_abundance,BCR_rich,by="BCR")
+
+#calculate median values for environmental data based on spatial area of interest (state or BCR)
+#State
+env_med <- env %>% filter(StateNum==83) %>%
+  group_by(Year)%>%
+  summarise(Med_StartTemp=median(StartTemp),Med_EndTemp=median(EndTemp),,
+            Med_CarsObs=median(TotalCarObs),Med_PRCP=median(PRCP[PRCP !=0],na.rm=TRUE),
+            Med_TMAX=median(TMAX,na.rm=TRUE),Med_TMIN=median(TMIN,na.rm=TRUE))
+
+#convert F to C
+fahrenheit_to_celsius <- function(F) {
+  ifelse(is.na(F), NA, (F - 32) * 5/9)
+}
+
+env_med <- env_med %>%
+  mutate(
+    across(c(Med_StartTemp, Med_EndTemp),
+           ~ fahrenheit_to_celsius(.x),
+           .names = "{.col}_C")
+  )
+
+
+env_med <- env_med %>% select(-Med_StartTemp,-Med_EndTemp)
+  
+env_med <- env_med %>%  
+  mutate(Med_StartTemp=round(Med_StartTemp_C,1),Med_EndTemp=round(Med_EndTemp_C,1)) %>%
+  select(-Med_StartTemp_C,-Med_EndTemp_C)
+
+env_med <- env_med %>%
+  pivot_longer(
+    cols = c(Med_CarsObs, Med_PRCP,Med_TMAX,Med_TMIN,Med_StartTemp,Med_EndTemp),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(feature, value) %>%
+  pivot_wider(
+    names_from = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+#merge with state data
+env_med$StateNum <- 83
+
+state_trends <- merge(state_trends,env_med,by="StateNum")
+
+#BCR
+env_med_b <- env %>% 
+  group_by(Year,BCR)%>%
+  summarise(Med_StartTemp=median(StartTemp),Med_EndTemp=median(EndTemp),,
+            Med_CarsObs=median(TotalCarObs),Med_PRCP=median(PRCP[PRCP !=0],na.rm=TRUE),
+            Med_TMAX=median(TMAX,na.rm=TRUE),Med_TMIN=median(TMIN,na.rm=TRUE))
+
+env_med_b <- env_med_b %>%
+  mutate(
+    across(c(Med_StartTemp, Med_EndTemp),
+           ~ fahrenheit_to_celsius(.x),
+           .names = "{.col}_C")
+  )
+
+env_med_b <- env_med_b %>% select(-Med_StartTemp,-Med_EndTemp)
+
+env_med_b <- env_med_b %>%  
+  mutate(Med_StartTemp=round(Med_StartTemp_C,1),Med_EndTemp=round(Med_EndTemp_C,1)) %>%
+  select(-Med_StartTemp_C,-Med_EndTemp_C)
+
+
+
+env_med_b <- env_med_b %>%
+  ungroup() %>%    
+  pivot_longer(
+    cols = c(Med_CarsObs, Med_PRCP, Med_TMAX, Med_TMIN, 
+             Med_StartTemp, Med_EndTemp),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(feature = paste0(var, "_", Year)) %>%
+  select(BCR, feature, value) %>%
+  pivot_wider(
+    names_from  = feature,
+    values_from = value,
+    values_fill = 0
+  )
+
+
+#merge with bcr data
+bcr_trends <- merge(bcr_trends,env_med_b,by="BCR")
+
+# Trend calculations [training dataset only]
+# Get the abundance data for entire state and BCRs (these are the BCRs that intersect the state),
+# Adjust the abundance over time for the number of routes over time (group by year)
+# Then get the trend over time (slope of the linear regression)
+# use that to create label (increasing - slope > 0.00, decreasing - slope < 0.00, stable - slope = 0.00)
+#these labels will go in either of two new fields (StateTrend, BCRTrend) - will have to rejoin the tables and 
+#then export a new csv file
+
+#from macroecology - "in performing correlation analyses it is important you use only sites where a species 
+#occurs to calculate its average abundance" (exclude 0 values)
+
+#filtered for the subset of interest for our study (1997-2023)
+
+
+#slope calculations for 1997-2023
+analyze_all_species <- function(data,
+                                state_number = 83,
+                                output_dir = "trends/texas",
+                                slope_threshold = 0.04) {
+  
+  # Ensure directory exists
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  
+  # ---------------------------------------------------
+  # 0. FILTER SCIENTIFIC NAMES
+  # ---------------------------------------------------
+  data_clean <- data %>%
+    filter(
+      !grepl(" / ", scientific_name),
+      !grepl(" sp\\.", scientific_name),
+      !grepl(" x ", scientific_name, ignore.case = TRUE)
+    )
+  
+  message("Filtered species count: ", length(unique(data_clean$scientific_name)))
+  
+  species_list <- sort(unique(data_clean$scientific_name))
+  
+  state_results <- list()
+  BCR_master <- list()
+  
+  for (sp in species_list) {
+    
+    message("Processing: ", sp)
+    
+    # ---------------------------------------------------
+    # 1. STATE-LEVEL TREND (FILTERED BY StateNum)
+    # ---------------------------------------------------
+    train_state <- data_clean %>%
+      filter(StateNum == state_number,
+             scientific_name == sp) %>%
+      group_by(Year) %>%
+      summarise(adj_species_abundance = round(sum(Abundance) /
+                                                n_distinct(Route)), .groups = "drop")
+    
+    slope <- adjR2 <- lower_CI <- upper_CI <- NA
+    trend <- NA
+    
+    if (nrow(train_state) >= 3) {
+      mod_state <- lm(adj_species_abundance ~ Year, data = train_state)
+      slope <- coef(mod_state)["Year"]
+      adjR2 <- summary(mod_state)$adj.r.squared
+      ci <- confint(mod_state)["Year", ]
+      lower_CI <- ci[1]
+      upper_CI <- ci[2]
+      
+      # Trend classification with slope threshold + CI override
+      if (lower_CI <= 0 && upper_CI >= 0) {
+        trend <- "Stable"
+      } else if (slope >= slope_threshold) {
+        trend <- "Increasing"
+      } else if (slope <= -slope_threshold) {
+        trend <- "Decreasing"
+      } else {
+        trend <- "Stable"
+      }
+    }
+    
+    state_results[[sp]] <- data.frame(
+      scientific_name = sp,
+      StateNum = state_number,
+      slope = slope,
+      lower_CI = lower_CI,
+      upper_CI = upper_CI,
+      Adj_R2 = adjR2,
+      Trend = trend
+    )
+    
+    
+    # ---------------------------------------------------
+    # 1b. SAFE STATE PLOT
+    # ---------------------------------------------------
+    if (nrow(train_state) > 0) {
+      
+      title_text <- paste0(
+        "Linear Regression of Adjusted Species Abundance Over Time\n",
+        "Slope = ", round(slope, 4),
+        " | CI = [", round(lower_CI, 4), ", ", round(upper_CI, 4), "]",
+        " | Adjusted R² = ", round(adjR2, 4),
+        " | Trend: ", trend
+      )
+      
+      png(filename = paste0(output_dir, "/", gsub(" ", "_", sp),
+                            "_state_plot.png"),
+          width = 1200, height = 900, res = 150)
+      
+      plot(train_state$Year, train_state$adj_species_abundance,
+           xlab = "Year",
+           ylab = "Adjusted Species Abundance (#Individuals/#Routes)",
+           main = title_text)
+      
+      if (nrow(train_state) >= 3) abline(mod_state, lwd = 2)
+      
+      dev.off()
+    }
+    
+    
+    # ---------------------------------------------------
+    # 2. BCR-LEVEL TRENDS (FULL DATA, NO STATE FILTER)
+    # ---------------------------------------------------
+    train_bcr <- data_clean %>%
+      filter(scientific_name == sp) %>%
+      group_by(Year, BCR) %>%
+      summarise(adj_species_abundance = round(sum(Abundance) /
+                                                n_distinct(Route)), .groups = "drop")
+    
+    if (nrow(train_bcr) == 0) next
+    
+    BCR_trends <- train_bcr %>%
+      group_by(BCR) %>%
+      group_modify(~{
+        
+        if (nrow(.x) >= 3) {
+          m <- lm(adj_species_abundance ~ Year, data = .x)
+          
+          slope <- coef(m)["Year"]
+          ci <- confint(m)["Year", ]
+          lower_CI <- ci[1]
+          upper_CI <- ci[2]
+          
+          # CI override + threshold rule
+          if (lower_CI <= 0 && upper_CI >= 0) {
+            trend <- "Stable"
+          } else if (slope >= slope_threshold) {
+            trend <- "Increasing"
+          } else if (slope <= -slope_threshold) {
+            trend <- "Decreasing"
+          } else {
+            trend <- "Stable"
+          }
+          
+          tibble(
+            slope = slope,
+            lower_CI = lower_CI,
+            upper_CI = upper_CI,
+            intercept = coef(m)["(Intercept)"],
+            adj_r2 = summary(m)$adj.r.squared,
+            Trend = trend
+          )
+          
+        } else {
+          tibble(
+            slope = NA, lower_CI = NA, upper_CI = NA,
+            intercept = NA, adj_r2 = NA, Trend = NA
+          )
+        }
+      }) %>%
+      mutate(scientific_name = sp) %>%
+      select(scientific_name, BCR, everything())
+    
+    BCR_master[[sp]] <- BCR_trends
+    
+    write.csv(
+      BCR_trends,
+      paste0(output_dir, "/", gsub(" ", "_", sp), "_BCR_trends.csv"),
+      row.names = FALSE
+    )
+    
+    
+    # ---------------------------------------------------
+    # 2b. SAFE BCR PLOT
+    # ---------------------------------------------------
+    gg <- ggplot(train_bcr, aes(x = Year, y = adj_species_abundance)) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
+      facet_wrap(~ BCR, scales = "free_y") +
+      labs(
+        x = "Year",
+        y = "Adjusted Species Abundance",
+        title = paste("Linear Regression by BCR for:", sp)
+      )
+    
+    ggsave(filename = paste0(output_dir, "/", gsub(" ", "_", sp),
+                             "_BCR_plot.png"),
+           plot = gg, width = 12, height = 10, dpi = 150)
+  }
+  
+  
+  # ---------------------------------------------------
+  # 3. MASTER TABLES
+  # ---------------------------------------------------
+  state_table <- bind_rows(state_results)
+  BCR_master_table <- bind_rows(BCR_master)
+  
+  write.csv(state_table,
+            paste0(output_dir, "/STATE_master_trends_with_CI.csv"),
+            row.names = FALSE)
+  
+  write.csv(BCR_master_table,
+            paste0(output_dir, "/BCR_master_trends_with_CI.csv"),
+            row.names = FALSE)
+  
+  list(
+    State_Trends = state_table,
+    BCR_Trends = BCR_master_table
+  )
+}
+
+#call the function
+analyze_all_species(data=bbs_tx_sub)
+
+
+#Final training dataset creation
+#state
+state <- read.csv("trends/texas/STATE_master_trends_with_CI.csv")
+state <- state %>% select(scientific_name,StateNum,slope)
+
+training_state <- merge(state_trends,state,by=c("scientific_name","StateNum"))
+
+training_state <- training_state %>%
+  select(
+    scientific_name,StateNum,
+    {
+      yr_cols <- names(.)[str_detect(names(.), "_\\d{4}$")]
+      yr_cols[order(as.numeric(str_extract(yr_cols, "\\d{4}")))]
+    },slope
+  )
+
+write.csv(training_state,"training/training_TX.csv",row.names = FALSE)
+
+bcr <- read.csv("trends/texas/BCR_master_trends_with_CI.csv")
+bcr <- bcr %>% select(scientific_name,BCR,slope)
+training_bcr <- merge(bcr_trends,bcr,by=c("scientific_name","BCR"))
+training_bcr <- training_bcr %>%
+  select(
+    scientific_name,BCR,
+    {
+      yr_cols <- names(.)[str_detect(names(.), "_\\d{4}$")]
+      yr_cols[order(as.numeric(str_extract(yr_cols, "\\d{4}")))]
+    },slope
+  )
+
+write.csv(training_bcr,"training/training_BCR.csv",row.names = FALSE)
  

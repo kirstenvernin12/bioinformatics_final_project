@@ -1,0 +1,5 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Sayornis nigricans",18,-1.79619180794888e-17,-4.03294731628768e-17,4.40563700389927e-18,1.00000000000004,0.411591644601357,"Stable"
+"Sayornis nigricans",20,NA,NA,NA,NA,NA,NA
+"Sayornis nigricans",35,0.00997793822703555,-0.0256348481291195,0.0455907245831906,-18.3210489370234,-0.0273528711996827,"Stable"
+"Sayornis nigricans",36,NA,NA,NA,NA,NA,NA

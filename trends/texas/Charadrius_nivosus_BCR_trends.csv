@@ -1,0 +1,5 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Charadrius nivosus",18,0.142857142857146,-1.42912801245933,1.71484229817363,-285.142857142863,0.142857142856993,"Stable"
+"Charadrius nivosus",19,0,0,0,1,NA,"Stable"
+"Charadrius nivosus",35,NA,NA,NA,NA,NA,NA
+"Charadrius nivosus",37,-0.112600536193031,-0.28465721720743,0.0594561448213688,228.219839142094,0.454870420017841,"Stable"

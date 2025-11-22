@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Antrostomus vociferus",20,NA,NA,NA,NA,NA,NA
+"Antrostomus vociferus",21,3.67135332522492e-17,-4.79701516318324e-17,1.21397218136331e-16,0.999999999999926,0.451351884744448,"Stable"
+"Antrostomus vociferus",25,-0.0454773365423185,-0.0771539561409237,-0.0138007169437132,93.3150320898516,0.237337285199422,"Decreasing"

@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Setophaga discolor",21,NA,NA,NA,NA,NA,NA
+"Setophaga discolor",25,0.0788206979542721,0.0415498298087447,0.116091566099799,-153.70697954272,0.419293665119475,"Increasing"
+"Setophaga discolor",37,-0.0476190476190505,-0.354813325319044,0.259575230080943,99.0476190476249,-0.107313738892684,"Stable"

@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Leucophaeus atricilla",21,NA,NA,NA,NA,NA,NA
+"Leucophaeus atricilla",36,-0.405753691836146,-1.26742557205547,0.455918188383179,829.219141822195,-0.00167717781210186,"Stable"
+"Leucophaeus atricilla",37,-1.73009426393905,-4.58352664396296,1.12333811608486,3593.40097272367,0.0221373025108234,"Stable"

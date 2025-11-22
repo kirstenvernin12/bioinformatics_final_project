@@ -1,0 +1,6 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Actitis macularius",18,0.0043159257660768,-0.0269843811702407,0.0356162327023943,-7.38908070781178,-0.0568560970751304,"Stable"
+"Actitis macularius",19,-0.0242962645831111,-0.20970573268235,0.161113203516128,50.5366584608813,-0.0654171791232747,"Stable"
+"Actitis macularius",21,NA,NA,NA,NA,NA,NA
+"Actitis macularius",25,NA,NA,NA,NA,NA,NA
+"Actitis macularius",35,NA,NA,NA,NA,NA,NA

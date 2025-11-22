@@ -1,0 +1,5 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Ixobrychus exilis",19,-0.0992366412213735,-0.446832033611927,0.24835875116918,201.633587786259,0.145038167938906,"Stable"
+"Ixobrychus exilis",21,NA,NA,NA,NA,NA,NA
+"Ixobrychus exilis",36,NA,NA,NA,NA,NA,NA
+"Ixobrychus exilis",37,0.160800240673887,-0.00839554630089798,0.329996027648672,-317.877406738869,0.102251164278062,"Stable"

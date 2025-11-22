@@ -1,0 +1,4 @@
+"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
+"Crotophaga sulcirostris",21,NA,NA,NA,NA,NA,NA
+"Crotophaga sulcirostris",36,-0.050140393100682,-0.12595373774056,0.0256729515391958,103.070597673486,0.0333758277967581,"Stable"
+"Crotophaga sulcirostris",37,0.020679117147708,-0.0588034688831219,0.100161703178538,-38.6672665534804,-0.0332159070729365,"Stable"
