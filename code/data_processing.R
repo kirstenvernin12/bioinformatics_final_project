@@ -749,3 +749,15 @@ training_bcr <- training_bcr %>%
 
 write.csv(training_bcr,"training/training_BCR.csv",row.names = FALSE)
  
+#Merge the two datasets and include a spatial scale variable for BCR or State
+state <- read.csv("training/training_TX.csv")
+state$spatial_scale <- "state"
+state <- state %>% select(-StateNum)
+
+bcr <- read.csv("training/training_bcr.csv")
+bcr$spatial_scale <- "bcr"
+bcr <- bcr %>% select(-BCR)
+
+training <- rbind(state,bcr)
+
+write.csv(training, "training/training_texas.csv")

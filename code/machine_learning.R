@@ -1,199 +1,219 @@
-#North American Breeding Bird Survey Data Exploration (2024 Release) + NOAA Weather DATA (POR:1997-2023)
+#North American Breeding Bird Survey ML workflow - regression (predict slope)
 
-setwd("C:/Users/kirst/Desktop/data/aves/na_bbs/data")
-getwd()
+setwd("C:/Users/kirst/Desktop/UTA/Fall 2025/Bioinformatics/Final Project/bioinformatics_final_project")
 
-library(tidyverse)
-library(tidymodels)  # includes parsnip, recipes, workflows, yardstick, rsample, tune
-library(vip)         # variable importance plotting (optional)
-library(doParallel)  # parallel processing (optional)
-library(themis)    # for dealing with class imbalance (optional)
-library(ranger)
-library(kernlab)
 
-# Set a seed for reproducibility (ensures that the random component behaves the same way each time the code is run, which
-# is what guarantees reproducibility. This is necessary for models like Random Forest.)
-set.seed(1234)
+library(tidymodels)
+library(workflows)
+library(dplyr)
+library(ggplot2)
+library(vip)
+library(furrr)
+library(doFuture)
+library(caret)
 
-# Load the training dataset
-training <- read.csv("training_final.csv") #NOTE: ctrl+shift+alt+m to replace all objects with the same name
-#Convert NULL to NA
-training[training == "NULL"] <- NA
-
-#Remove unneeded fields. This will open memory and increase speed because large datasets with many unused columns take more
-#memory and longer processing times. Fewer columns also make preprocessing and feature selection steps easier to follow. 
-#This also reduces the risk of accidental leakage. Columns not intended as predictors may inadvertently leak information
-#about the target (if they contain IDs, dates, or future information - basically, better safe than sorry!) It is best
-#practice to keep only the columns you intend to use as predictors or target when feeding data into preprocessing/recipe 
-# steps. 
-
-#state training dataset
-training_TX <- training %>% filter(StateNum==83) %>% 
-  select(RouteName, Active, Stratum, BCR, Month, Day, Year, SpeciesTotal, 
-  RecordedCar, TotalCarObs, NoiseDetected, English_Common_Name, Order, Family, 
-  scientific_name, State_Trend, BCR_trend, PRCP, TMAX, TMIN)
+run_slope_regression <- function(
+    data,
+    drop_state_number = TRUE,
+    save_prefix = "slope_model",
+    parallel = TRUE,
+    n_cores = max(1, parallel::detectCores() - 1)
+) {
   
-
-#BCR training dataset
-training_BCR <- training %>% 
-  select(RouteName, Active, Stratum, BCR, Month, Day, Year, SpeciesTotal, 
-         RecordedCar, TotalCarObs, NoiseDetected, English_Common_Name, Order, Family, 
-         scientific_name, State_Trend, BCR_trend, PRCP, TMAX, TMIN)
-
-#Remove the one BCR that is NA
-training_BCR <- training_BCR  %>% filter(!is.na(BCR_trend))
-
-# Will model each trend separately (at the BCR scale and at the State scale). Because of this, may want to add more species
-# to the training data. This is the most rigorous approach for abundance trends at different spatial scales. By treating
-# the labels separately:
-#     1. Because the trends at different scales often differ in magnitude and direction. Which we know is the case for 
-#     these data.
-#     2. Each responds to distinct ecological and sampling processes - and our hypothesis is potentially management policies?
-#     3. Model interpretation is more clear. 
-
-# The column name of the class/target variable. Change as needed.
-# e.g., "Condition" or whatever your outcome column is. This tells the model which column in 
-# the training dataset that is the outcome you want to be able to predict. This is the label. 
-# This line points to the label column, not the classifier. 
-
-# The full modeling pipeline is wrapped inside a function so that it can be called twice - once for each target variable (state and BCR trend)
-#This avoids code duplication and ensures identical preprocessing and tuning steps across both modeling tasks. 
-
-run_model_for_target <- function(df, target_col, target_is_factor = TRUE) {
+  # --------------------------------------------------------------------
+  # 1. CLEANING
+  # --------------------------------------------------------------------
   
-  # Ensure target is factor for classification
-  if (target_is_factor) {
-    df <- df %>% mutate(!!target_col := as.factor(.data[[target_col]]))
+  df <- data
+  
+  # Remove categorical ID fields
+  drop_cols <- c(
+    "scientific_name", "English_Common_Name", "Order", "Family",
+    "Genus", "Species", "Route", "RouteName", "Stratum",
+    "State", "X", "Unnamed..0", "Unnamed.0"
+  )
+  df <- df %>% select(-any_of(drop_cols))
+  
+  # Optionally drop StateNum
+  if (drop_state_number) {
+    df <- df %>% select(-any_of("StateNum"))
   }
   
-  # Train/Test split (stratified)
-  split <- initial_split(df, prop = 0.8, strata = all_of(target_col))
-  train_df <- training(split)
-  test_df  <- testing(split)
+  # Convert slope to numeric (required)
+  df$slope <- suppressWarnings(as.numeric(df$slope))
+  df <- df %>% filter(!is.na(slope))
   
-  # ------------------ Preprocessing recipe --------------------------------
-  rec <- recipe(as.formula(paste(target_col, "~ .")), data = train_df) %>%
-    step_nzv(all_predictors()) %>%
+  # Keep numeric columns only
+  num_cols <- names(df)[sapply(df, is.numeric)]
+  df <- df %>% select(all_of(num_cols))
+  
+  # Remove zero-variance predictors
+  nzv <- nearZeroVar(df, names = TRUE)
+  df <- df %>% select(-any_of(nzv))
+  
+  # --------------------------------------------------------------------
+  # 2. TRAIN/TEST SPLIT
+  # --------------------------------------------------------------------
+  set.seed(123)
+  split <- initial_split(df, prop = 0.8)
+  train <- training(split)
+  test  <- testing(split)
+  
+  # predictor list
+  predictor_cols <- setdiff(names(train), "slope")
+  
+  # --------------------------------------------------------------------
+  # 3. RECIPE
+  # --------------------------------------------------------------------
+  rec <- recipe(slope ~ ., data = train) %>%
     step_impute_median(all_numeric_predictors()) %>%
-    step_impute_mode(all_nominal_predictors()) %>%
-    step_novel(all_nominal_predictors())%>% #handle unseen factor levels
-    step_dummy(all_nominal_predictors(), -all_outcomes()) %>%
-    step_zv(all_predictors()) %>%           # remove zero-variance columns
     step_normalize(all_numeric_predictors())
   
-  prep_rec <- prep(rec, training = train_df)
+  rec_prep <- prep(rec)
   
-  # ------------------ Cross-validation ------------------------------------
-  cv_folds <- vfold_cv(train_df, v = 5, strata = all_of(target_col))
+  # --------------------------------------------------------------------
+  # 4. CROSS-VALIDATION
+  # --------------------------------------------------------------------
+  folds <- vfold_cv(train, v = 5)
   
-  # ------------------ Model specifications --------------------------------
-  logreg_spec <- multinom_reg(mode = "classification") %>%
-    set_engine("nnet")
+  # --------------------------------------------------------------------
+  # 5. MODEL SPECIFICATIONS
+  # --------------------------------------------------------------------
   
-  rf_spec <- rand_forest(mtry = tune(), trees = 1000, min_n = tune()) %>%
+  # Random Forest (regression)
+  rf_mod <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 500
+  ) %>%
     set_engine("ranger", importance = "impurity") %>%
-    set_mode("classification")
+    set_mode("regression")
   
-  svm_spec <- svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
+  # SVM RBF
+  svm_mod <- svm_rbf(
+    cost = tune(),
+    rbf_sigma = tune()
+  ) %>%
     set_engine("kernlab") %>%
-    set_mode("classification")
+    set_mode("regression")
   
-  # ------------------ Workflows ------------------------------------------
-  logreg_wf <- workflow() %>% add_model(logreg_spec) %>% add_recipe(rec)
-  rf_wf     <- workflow() %>% add_model(rf_spec)     %>% add_recipe(rec)
-  svm_wf    <- workflow() %>% add_model(svm_spec)    %>% add_recipe(rec)
+  # Workflows
+  rf_wf  <- workflow() %>% add_recipe(rec) %>% add_model(rf_mod)
+  svm_wf <- workflow() %>% add_recipe(rec) %>% add_model(svm_mod)
   
-  # ------------------ Tuning grids ----------------------------------------
-  rf_grid <- grid_latin_hypercube(
-    mtry(range = c(1L, ncol(train_df) - 1L)),
-    min_n(range = c(2L, 10L)),
-    size = 10
+  # --------------------------------------------------------------------
+  # 6. GRID SETUP (*** FIX: Proper mtry bounds ***)
+  # --------------------------------------------------------------------
+  
+  rf_params <- parameters(
+    mtry(range = c(1L, length(predictor_cols))),  # HARD LIMIT
+    min_n()
   )
   
-  svm_grid <- grid_latin_hypercube(
-    cost(range = c(-5, 2)),
-    rbf_sigma(range = c(-10, -1)),
-    size = 10
+  rf_grid <- grid_space_filling(
+    rf_params,
+    size = 20
   )
   
-  # ------------------ Parallel backend ------------------------------------
-  cores <- parallel::detectCores(logical = TRUE) - 1
-  cl <- makePSOCKcluster(cores)
-  registerDoParallel(cl)
-  
-  # ------------------ Hyperparameter tuning -------------------------------
-  set.seed(234)
-  rf_tune_res <- tune_grid(
-    rf_wf,
-    resamples = cv_folds,
-    grid = rf_grid,
-    metrics = metric_set(accuracy, roc_auc,kap,mcc),
-    control = control_grid(save_pred = TRUE)
+  svm_grid <- grid_space_filling(
+    parameters(cost(), rbf_sigma()),
+    size = 20
   )
   
-  set.seed(345)
-  svm_tune_res <- tune_grid(
-    svm_wf,
-    resamples = cv_folds,
-    grid = svm_grid,
-    metrics = metric_set(accuracy, roc_auc,kap,mcc),
-    control = control_grid(save_pred = TRUE)
-  )
-  
-  best_rf  <- select_best(rf_tune_res, metric = "roc_auc")
-  best_svm <- select_best(svm_tune_res, metric = "roc_auc")
-  
-  rf_final_wf  <- finalize_workflow(rf_wf, best_rf)
-  svm_final_wf <- finalize_workflow(svm_wf, best_svm)
-  
-  # ------------------ Fit tuned models ------------------------------------
-  logreg_fit <- fit(logreg_wf, data = train_df)
-  rf_fit     <- fit(rf_final_wf, data = train_df)
-  svm_fit    <- fit(svm_final_wf, data = train_df)
-  
-  stopCluster(cl)
-  registerDoSEQ()
-  
-  # ------------------ Evaluation ------------------------------------------
-  eval_model <- function(fit_obj, test_data, model_name) {
-    preds <- predict(fit_obj, test_data, type = "prob") %>%
-      bind_cols(predict(fit_obj, test_data, type = "class")) %>%
-      bind_cols(test_data %>% select(all_of(target_col)))
-    colnames(preds)[ncol(preds)] <- target_col
-    preds <- preds %>% rename(.pred_class = .pred_class)
-    pos <- levels(test_data[[target_col]])[2]
-    preds <- preds %>% mutate(.pred_positive = .data[[paste0(".pred_", pos)]])
-    metrics <- metric_set(accuracy, roc_auc, sens, spec)
-    res <- metrics(preds, truth = !!sym(target_col), estimate = .pred_class, .pred = .pred_positive)
-    return(list(preds = preds, metrics = res))
+  # --------------------------------------------------------------------
+  # 7. PARALLEL BACKEND
+  # --------------------------------------------------------------------
+  if (parallel) {
+    plan(multisession, workers = n_cores)
+    registerDoFuture()
   }
   
-  logreg_res <- eval_model(logreg_fit, test_df, "LogReg")
-  rf_res     <- eval_model(rf_fit, test_df, "RF")
-  svm_res    <- eval_model(svm_fit, test_df, "SVM")
+  # --------------------------------------------------------------------
+  # 8. TUNING
+  # --------------------------------------------------------------------
+  metrics_reg <- metric_set(rmse, rsq)
   
-  all_metrics <- bind_rows(
-    logreg_res$metrics %>% mutate(model = "LogReg"),
-    rf_res$metrics     %>% mutate(model = "RF"),
-    svm_res$metrics    %>% mutate(model = "SVM")
-  ) %>% select(model, .metric, .estimate)
+  ctrl <- control_grid(save_pred = TRUE, parallel_over = "resamples")
   
+  rf_tuned <- tune_grid(
+    rf_wf,
+    resamples = folds,
+    grid = rf_grid,
+    metrics = metrics_reg,
+    control = ctrl
+  )
+  
+  svm_tuned <- tune_grid(
+    svm_wf,
+    resamples = folds,
+    grid = svm_grid,
+    metrics = metrics_reg,
+    control = ctrl
+  )
+  
+  # --------------------------------------------------------------------
+  # 9. SELECT BEST MODELS
+  # --------------------------------------------------------------------
+  best_rf  <- select_best(rf_tuned, metric = "rmse")
+  best_svm <- select_best(svm_tuned, metric = "rmse")
+  
+  rf_final  <- finalize_workflow(rf_wf, best_rf)
+  svm_final <- finalize_workflow(svm_wf, best_svm)
+  
+  # --------------------------------------------------------------------
+  # 10. FIT FINAL MODELS
+  # --------------------------------------------------------------------
+  rf_fit  <- fit(rf_final, train)
+  svm_fit <- fit(svm_final, train)
+  
+  # --------------------------------------------------------------------
+  # 11. PREDICTIONS + METRICS
+  # --------------------------------------------------------------------
+  rf_preds <- predict(rf_fit, test) %>%
+    bind_cols(test %>% select(slope))
+  
+  svm_preds <- predict(svm_fit, test) %>%
+    bind_cols(test %>% select(slope))
+  
+  rf_metrics  <- metrics_reg(rf_preds, truth = slope, estimate = .pred)
+  svm_metrics <- metrics_reg(svm_preds, truth = slope, estimate = .pred)
+  
+  # --------------------------------------------------------------------
+  # 12. VARIABLE IMPORTANCE
+  # --------------------------------------------------------------------
+  rf_imp <- vi(extract_fit_parsnip(rf_fit))
+  
+  # --------------------------------------------------------------------
+  # 13. SAVE OUTPUT
+  # --------------------------------------------------------------------
+  write.csv(rf_metrics,  paste0(save_prefix, "_rf_metrics.csv"),  row.names = FALSE)
+  write.csv(svm_metrics, paste0(save_prefix, "_svm_metrics.csv"), row.names = FALSE)
+  write.csv(rf_imp,      paste0(save_prefix, "_rf_importance.csv"), row.names = FALSE)
+  
+  # --------------------------------------------------------------------
+  # 14. RETURN RESULTS
+  # --------------------------------------------------------------------
   return(list(
-    target = target_col,
-    logreg = logreg_res,
-    rf     = rf_res,
-    svm    = svm_res,
-    metrics = all_metrics
+    rf_fit = rf_fit,
+    svm_fit = svm_fit,
+    rf_metrics = rf_metrics,
+    svm_metrics = svm_metrics,
+    rf_importance = rf_imp,
+    rf_tuned = rf_tuned,
+    svm_tuned = svm_tuned
   ))
 }
 
+res_State <- run_slope_regression(
+  data = training_TX_clean,
+  save_prefix = "State_slope",
+  parallel = TRUE,
+  n_cores = 6
+)
 
-# Run model for BCR trend
-res_BCR <- run_model_for_target(training_BCR, target_col = "BCR_trend")
-
-# Run model for state trend
-res_State <- run_model_for_target(training_TX, target_col = "State_Trend")
-
-# Inspect metrics
-res_BCR$metrics
-res_State$metrics
+res_BCR <- run_slope_regression(
+  data = training_BCR_clean,
+  save_prefix = "BCR_slope",
+  parallel = TRUE,
+  n_cores = 6
+)
