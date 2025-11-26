@@ -1,6 +1,0 @@
-"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
-"Xanthocephalus xanthocephalus",18,-0.00330926594464583,-0.191314211578172,0.18469567968888,12.3426594464517,-0.041609387705515,"Stable"
-"Xanthocephalus xanthocephalus",19,-0.364019253910952,-0.608960519447131,-0.119077988374774,746.19253910951,0.251678275280328,"Decreasing"
-"Xanthocephalus xanthocephalus",21,NA,NA,NA,NA,NA,NA
-"Xanthocephalus xanthocephalus",25,NA,NA,NA,NA,NA,NA
-"Xanthocephalus xanthocephalus",35,-0.0239726027397272,-0.702294964280284,0.65434975880083,50.3664383561668,-0.66438356164381,"Stable"
