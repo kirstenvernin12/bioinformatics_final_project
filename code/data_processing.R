@@ -1,6 +1,8 @@
 #North American Breeding Bird Survey Data Exploration (2024 Release)
 setwd("C:/Users/kirst/Desktop/UTA/Fall 2025/Bioinformatics/Final Project/bioinformatics_final_project")
 
+#used to create training and testing datasets
+
 #load libraries
 library(dplyr)
 library(ggplot2)
