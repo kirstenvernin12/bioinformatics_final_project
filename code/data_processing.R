@@ -5,15 +5,9 @@ setwd("C:/Users/kirst/Desktop/UTA/Fall 2025/Bioinformatics/Final Project/bioinfo
 
 #load libraries
 library(dplyr)
-library(ggplot2)
-library(sf)
 library(data.table)
-library(R.utils)
 library(lubridate)
-library(purrr)
-library(tidyr)
-library(broom)
-library(stringr)
+library(sf)
 
 #Data processing
 #join the US BBS data into one file
@@ -160,6 +154,8 @@ process_weather_years <- function(
 }
 
 
+#Match weather stations with closest route point
+weatherstations <- read.csv("raw_data/NOAA_weather/ghcnd-stations.csv")
 
 #Get the state values only - these will be the ones added to the final state abundance df
 tx_stations <- weatherstations %>% filter(STATE=="TX")
@@ -178,8 +174,7 @@ annual_weather_tx <- weather_state %>% group_by(Year) %>% summarize(PRCP_mean=me
                                                                     TMAX_mean=mean(TMAX, na.rm=TRUE),
                                                                     TMIN_mean=mean(TMIN,na.rm=TRUE))
 
-#Match weather stations with closest route point
-weatherstations <- read.csv("raw_data/NOAA_weather/ghcnd-stations.csv")
+
 
 
 #First convert both data frames to sf point objects
@@ -219,8 +214,6 @@ annual_weather_bcrs <- weather_bcr%>% group_by(BCR,Year) %>% summarize(PRCP_mean
 
 #PRCP: mm
 #TMIN and TMAX: degrees celsius
-#StartTemp and EndTemp degrees F
-
 
 #Calculate annual summary stats
 #Filter out hybrids and unknown species
@@ -234,7 +227,7 @@ bbs_tx_sub <- bbs_tx_sub %>% filter(
 #State
 state_abund <- bbs_tx_sub %>% filter(StateNum==83) %>%
   group_by(Year,scientific_name) %>%
-  summarise(Abundance=sum(Abundance)) 
+  summarise(Abundance_mean=mean(Abundance)) 
 state_abund$region_id <- "TX"
 state_abund$spatial_scale <- "State"
 
@@ -242,7 +235,7 @@ state_abund$spatial_scale <- "State"
 #BCR
 BCR_abund <- bbs_tx_sub %>% 
   group_by(Year,scientific_name,BCR) %>%
-  summarise(Abundance=sum(Abundance)) 
+  summarise(Abundance_mean=mean(Abundance)) 
 
 BCR_abund <- BCR_abund %>%
   rename(region_id=BCR)
