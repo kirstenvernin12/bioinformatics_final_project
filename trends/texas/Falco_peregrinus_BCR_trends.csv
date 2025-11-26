@@ -1,5 +1,0 @@
-"scientific_name","BCR","slope","lower_CI","upper_CI","intercept","adj_r2","Trend"
-"Falco peregrinus",18,0,0,0,1,NA,"Stable"
-"Falco peregrinus",19,NA,NA,NA,NA,NA,NA
-"Falco peregrinus",21,NA,NA,NA,NA,NA,NA
-"Falco peregrinus",35,-0.0214285714285671,-0.107941275348869,0.0650841324917352,44.2571428571341,-0.110000000000024,"Stable"
