@@ -87,8 +87,7 @@ bbs_fl_bcr <- bbs_fl_bcr[,c("RouteDataID", "Route", "StateNum","Latitude", "Long
 write.csv(bbs_fl_bcr,"raw_data/bbs_fl_bcr.csv",row.names = FALSE)
 
 #filter for period of interest (1997-2023) and species of interest (for testing data only)
-bbs_fl_sub <- bbs_fl_bcr %>% filter(Year>=1997) %>%
-  filter(scientific_name=="Chaetura pelagica"|scientific_name=="Chordeiles minor")
+bbs_fl_sub <- bbs_fl_bcr %>% filter(Year>=1997) 
 
 #Import, filter, and process NOAA weather data
 process_weather_years <- function(
@@ -230,7 +229,7 @@ state_abund <- bbs_fl_sub %>% filter(StateNum==25) %>% #update for state
   group_by(Year,scientific_name) %>%
   summarise(Abundance_mean=round(mean(Abundance))) 
 state_abund$region_id <- "FL"
-state_abund$spatial_scale <- "State"
+
 
 
 #BCR
@@ -240,8 +239,6 @@ BCR_abund <- bbs_fl_sub %>%
 
 BCR_abund <- BCR_abund %>%
   rename(region_id=BCR)
-
-BCR_abund$spatial_scale <- "BCR"
 
 #Cars observed (get average for the state and for the BCRs)
 #State
