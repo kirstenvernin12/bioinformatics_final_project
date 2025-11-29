@@ -32,16 +32,16 @@ routes <- routes %>% select(-CountryNum)
 bbs_us <- merge(bbs_us,routes,by=c("StateNum","Route"))
 
 #to get list of BCRs that enter state of interest
-get_state_bcrs <- function(data, state_number) {
+get_state_bcrs <- function(data, state_numbers) {
   data %>%
-    filter(StateNum == state_number) %>%
+    filter(StateNum %in% state_numbers) %>%
     distinct(BCR) %>%
     pull(BCR)
 }
 
 #State Workflow
-fl_bcrs <- get_state_bcrs(bbs_us, 25) # update state number and list name
-bbs_fl_bcr <- bbs_us %>% filter(BCR %in% fl_bcrs) #update new df name and list name from above
+mid_bcrs <- get_state_bcrs(bbs_us, c(49,91,50)) # update state number and list name
+bbs_mid_bcr <- bbs_us %>% filter(BCR %in% mid_bcrs) #update new df name and list name from above
 
 #Texas observations with SpeciesList to obtain species names and routes to gather route information
 species <- read.csv("raw_data/SpeciesList.csv")
@@ -66,28 +66,28 @@ weather <- weather %>%
   select(RouteDataID,Month,Day,StartTime,EndTime)
 
 #No filtering required because "AOU" only shared field - update the df name to state of interest
-bbs_fl_bcr <- merge(bbs_fl_bcr,species, by="AOU")
-bbs_fl_bcr <- merge(dist,bbs_fl_bcr, by="RouteDataID")
-bbs_fl_bcr <- merge(weather,bbs_fl_bcr,by="RouteDataID")
+bbs_mid_bcr <- merge(bbs_mid_bcr,species, by="AOU")
+bbs_mid_bcr <- merge(dist,bbs_mid_bcr, by="RouteDataID")
+bbs_mid_bcr <- merge(weather,bbs_mid_bcr,by="RouteDataID")
 
 #Create summary fields/tables and then clean up species (what to do with hybrids, ect. prior to plotting)
 #Step 1 - create a combined Genus species field
-bbs_fl_bcr <- bbs_fl_bcr %>% mutate(scientific_name = paste(Genus,Species, sep = " "))
+bbs_mid_bcr <- bbs_mid_bcr %>% mutate(scientific_name = paste(Genus,Species, sep = " "))
 
-bbs_fl_bcr <- bbs_fl_bcr %>% select(c(RouteDataID,Route,StateNum,Latitude,Longitude,
+bbs_mid_bcr <- bbs_mid_bcr %>% select(c(RouteDataID,Route,StateNum,Latitude,Longitude,
                                       BCR,Month,Day,Year,TotalCarObs,SpeciesTotal,
                                       scientific_name))%>%
   rename(Abundance=SpeciesTotal)
 
 
 #organize fields - update for state of interest
-bbs_fl_bcr <- bbs_fl_bcr[,c("RouteDataID", "Route", "StateNum","Latitude", "Longitude", "BCR",
+bbs_mid_bcr <- bbs_mid_bcr[,c("RouteDataID", "Route", "StateNum","Latitude", "Longitude", "BCR",
                           "Month", "Day", "Year", "Abundance", "TotalCarObs",
                           "scientific_name")] 
-write.csv(bbs_fl_bcr,"raw_data/bbs_fl_bcr.csv",row.names = FALSE)
+write.csv(bbs_mid_bcr,"raw_data/bbs_mid_bcr.csv",row.names = FALSE)
 
 #filter for period of interest (1997-2023) and species of interest (for testing data only)
-bbs_fl_sub <- bbs_fl_bcr %>% filter(Year>=1997) 
+bbs_mid_sub <- bbs_mid_bcr %>% filter(Year>=1997) 
 
 #Import, filter, and process NOAA weather data
 process_weather_years <- function(
@@ -126,7 +126,7 @@ process_weather_years <- function(
     dt <- dt[ELEMENT %in% c("PRCP", "TMAX", "TMIN")]
     
     # Keep essential columns
-    dt <- dt[, .(ID, DATE_YYYYMMDD, ELEMENT, VALUE)]
+    dt <- dt[, .(ID,DATE_YYYYMMDD, ELEMENT, VALUE)]
     
     # Long → wide
     dt <- dcast(
@@ -158,19 +158,23 @@ process_weather_years <- function(
 weatherstations <- read.csv("raw_data/NOAA_weather/ghcnd-stations.csv")
 
 #Get the state values only - these will be the ones added to the final state abundance df - update state num and name
-fl_stations <- weatherstations %>% filter(STATE=="FL")
-bbs_florida <- bbs_fl_sub %>% filter(StateNum==25)
+mid_stations <- weatherstations %>% filter(STATE=="MI"|STATE=="MN"|STATE=="WI")
+bbs_midwest <- bbs_mid_sub %>% filter(StateNum==49|StateNum==91|StateNum==50)
 #Implement the function
 path <- "raw_data/NOAA_WEATHER/"
 years <- 1997:2023
-stations <- fl_stations$ID
+stations <- mid_stations$ID
 
 weather_state <- process_weather_years(path, years, stations)
 weather_state <- weather_state %>% mutate(DATE_YYYYMMDD=ymd(DATE_YYYYMMDD),
                                           Year=year(DATE_YYYYMMDD))
 
+#will need to add in a step that matches the NOAA weather stations to the state prior to doing the calculations
+state_stations <- mid_stations %>% select(ID, STATE)
+weather_state <- merge(weather_state, state_stations, by = "ID")
+
 #Get annual PRCP, TMAX, TMIN by year for the state. This will be joined with the annual abundance data by species for the state.
-annual_weather_fl <- weather_state %>% group_by(Year) %>% summarize(PRCP_mean=mean(PRCP,na.rm=TRUE), 
+annual_weather_mid <- weather_state %>% group_by(STATE,Year) %>% summarize(PRCP_mean=mean(PRCP,na.rm=TRUE), 
                                                                     TMAX_mean=mean(TMAX, na.rm=TRUE),
                                                                     TMIN_mean=mean(TMIN,na.rm=TRUE))
 
@@ -178,7 +182,7 @@ annual_weather_fl <- weather_state %>% group_by(Year) %>% summarize(PRCP_mean=me
 
 
 #First convert both data frames to sf point objects
-points <- st_as_sf(bbs_fl_sub, #update for state of interest
+points <- st_as_sf(bbs_mid_sub, #update for state of interest
                    coords = c("Longitude", "Latitude"),
                    crs = 4326)
 
@@ -217,7 +221,7 @@ annual_weather_bcrs <- weather_bcr%>% group_by(BCR,Year) %>% summarize(PRCP_mean
 
 #Calculate annual summary stats for state of interest (have to update below)
 #Filter out hybrids and unknown species
-bbs_fl_sub <- bbs_fl_sub %>% filter(                                            
+bbs_mid_sub <- bbs_mid_sub %>% filter(                                            
   !grepl(" / ", scientific_name),
   !grepl(" sp\\.", scientific_name),
   !grepl(" x ", scientific_name, ignore.case = TRUE)
@@ -225,15 +229,21 @@ bbs_fl_sub <- bbs_fl_sub %>% filter(
 
 #Abundance
 #State
-state_abund <- bbs_fl_sub %>% filter(StateNum==25) %>% #update for state
-  group_by(Year,scientific_name) %>%
-  summarise(Abundance_mean=round(mean(Abundance))) 
-state_abund$region_id <- "FL"
+state_abund <- bbs_mid_sub %>% filter(StateNum==49|StateNum==91|StateNum==50) %>% #update for state
+  group_by(StateNum,Year,scientific_name) %>%
+  summarise(Abundance_mean=round(mean(Abundance))) %>%
+  rename(region_id=StateNum) %>%
+  mutate(region_id = recode(
+    region_id,
+    "49" = "MI",
+    "91" = "WI",
+    "50" = "MN"
+  ))
 
 
 
 #BCR
-BCR_abund <- bbs_fl_sub %>% 
+BCR_abund <- bbs_mid_sub %>% 
   group_by(Year,scientific_name,BCR) %>%
   summarise(Abundance_mean=round(mean(Abundance))) 
 
@@ -242,26 +252,34 @@ BCR_abund <- BCR_abund %>%
 
 #Cars observed (get average for the state and for the BCRs)
 #State
-env_state <- bbs_fl_sub %>% filter(StateNum==25) %>% select(Year,TotalCarObs)%>% #update state
-  group_by(Year)%>%
-  summarize(CarsObs_mean=round(mean(TotalCarObs)))
+env_state <- bbs_mid_sub %>% filter(StateNum==49|StateNum==91|StateNum==50) %>% select(StateNum,Year,TotalCarObs)%>% #update state
+  group_by(StateNum,Year)%>%
+  summarize(CarsObs_mean=round(mean(TotalCarObs))) %>%
+  rename(region_id=StateNum) %>%
+  mutate(region_id = recode(
+    region_id,
+    "49" = "MI",
+    "91" = "WI",
+    "50" = "MN"
+  ))
   
 #BCR
-env_bcr<- bbs_fl_sub %>% select(Year,BCR,TotalCarObs)%>% #update state
+env_bcr<- bbs_mid_sub %>% select(Year,BCR,TotalCarObs)%>% #update state
   group_by(Year,BCR)%>%
   summarise(CarsObs_mean=round(mean(TotalCarObs))) %>%
   rename(region_id=BCR)
 
 #state trends
-state_trends <- merge(state_abund,annual_weather_fl,by="Year") #update state
-state_trends <- merge(state_trends,env_state,by="Year")
+annual_weather_mid <- annual_weather_mid %>%  rename(region_id=STATE)
+state_trends <- merge(state_abund,annual_weather_mid,by=c("region_id","Year")) #update state
+state_trends <- merge(state_trends,env_state,by=c("region_id","Year"))
 
 #bcr trends
 annual_weather_bcrs <- annual_weather_bcrs %>% rename(region_id=BCR)
 bcr_trends <- merge(BCR_abund,annual_weather_bcrs,by=c("region_id","Year"))
 bcr_trends <- merge(bcr_trends,env_bcr,by=c("region_id","Year"))
 
-testing_florida <- rbind(state_trends,bcr_trends) #update df name for state of interest
+testing_midwest <- rbind(state_trends,bcr_trends) #update df name for state of interest
 
-write.csv(testing_florida, "testing/testing_florida.csv",row.names = FALSE) #update file location for state of interest
+write.csv(testing_midwest, "testing/testing_midwest.csv",row.names = FALSE) #update file location for state of interest
 
